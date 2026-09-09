@@ -68,7 +68,7 @@ key; the two that matter:
 
 ```ini
 [Renderer]
-Backend=3               ; 3 = DirectX 12.  1 = no translation at all.
+Backend=2               ; 2 = DirectX 12.  1 = no translation at all.
 BorderlessFullscreen=1  ; recommended
 ```
 
@@ -77,8 +77,7 @@ hatch for a machine with no Direct3D 12 adapter, not a second renderer — MWOn1
 falls back to it by itself if the adapter cannot do D3D12 feature level 11_0,
 and says so in the log.
 
-`Backend=2` was MWDX's DirectX 11 renderer. MWOn12 does not carry it; the value
-is accepted and treated as `3`.
+`Backend=2` uses MWOn12.
 
 ### If something looks wrong
 
