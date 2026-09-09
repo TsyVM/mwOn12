@@ -1,0 +1,21 @@
+LIBRARY d3d9
+EXPORTS
+    Direct3DCreate9
+    Direct3DCreate9Ex
+    Direct3DCreate9On12
+    Direct3DCreate9On12Ex
+    D3DPERF_BeginEvent
+    D3DPERF_EndEvent
+    D3DPERF_GetStatus
+    D3DPERF_QueryRepeatFrame
+    D3DPERF_SetMarker
+    D3DPERF_SetOptions
+    D3DPERF_SetRegion
+    DebugSetMute
+
+    ; Runtime registration, for ASI mods. Not part of the d3d9 surface -- the
+    ; game never calls these; an .asi resolves them by name off this module to
+    ; join the plugin system and get the D3D12 device. See <mwon12/mwon12.h>.
+    MWOn12_RegisterPlugin
+    MWOn12_UnregisterPlugin
+    MWOn12_GetHost

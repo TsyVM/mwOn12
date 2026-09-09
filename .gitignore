@@ -1,0 +1,23 @@
+# Build output
+build_win32/
+build/
+out/
+*.dir/
+*.vcxproj*
+*.sln
+CMakeCache.txt
+CMakeFiles/
+
+# MSVC intermediates
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.exp
+*.tlog
+*.log
+
+# Runtime output, written next to the game rather than here
+MWOn12.log
+MWOn12-render.log
+MWOn12-render.prev.log

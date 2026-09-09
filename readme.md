@@ -77,7 +77,9 @@ hatch for a machine with no Direct3D 12 adapter, not a second renderer — MWOn1
 falls back to it by itself if the adapter cannot do D3D12 feature level 11_0,
 and says so in the log.
 
-`Backend=2` uses MWOn12.
+There are two options and they are numbered 1 and 2. MWDX used 1/2/3 with 2
+meaning its DirectX 11 backend; an old ini that still says `3` is accepted and
+means DirectX 12.
 
 ### If something looks wrong
 
@@ -93,17 +95,44 @@ Turn them back off afterwards. Each one costs performance.
 
 ## Modding
 
-[**MWOn12SDK**](https://github.com/TsyVM/mwOn12-sdk) is a separate folder next door, with two things
-in it:
+[**MWOn12SDK**](../MWOn12SDK) is a separate folder next door, with three
+things in it:
 
 - **Shader kit** — replace the game's shaders with your own HLSL. No compiler,
   no code: set `ShaderDump=1` and `ShaderMods=1`, play, edit the dumped file,
-  restart.
+  restart. Start here: most graphics mods are this.
 - **Plugin SDK** — write a DLL that MWOn12 loads and hands the live D3D12
   device to, once per frame, with the back buffer bound and ready to draw on.
+- **Graphics and hooking** — reach further than the present hook: see every
+  draw as it is recorded and swap shaders at runtime with
+  `<mwon12/graphics.hpp>`, or reach the game's own code with
+  `<mwon12/hooks.hpp>`.
 
 Plugins go in `<game>\MWOn12\Plugins\`. MWOn12 builds fine without the SDK
 present; it just loads no plugins, and CMake says so at configure time.
+
+### ASI mods
+
+MWOn12 is also an **ASI loader**. Drop a `.asi` into `<game>\scripts\` (or
+`<game>\MWOn12\ASI\`) and it runs — no separate loader needed, and no conflict
+with one you already have.
+
+An `.asi` is a DLL with a different extension and no required exports: it does
+its work from `DllMain`, which is the format most existing Most Wanted mods
+already ship in. They load on the first `Direct3DCreate9` — after the game's
+code is in memory, before it has drawn anything, and outside the loader lock, so
+hooks installed there are in place ahead of whatever they affect.
+
+An ASI is not limited to gameplay either. MWOn12 exports `MWOn12_RegisterPlugin`
+(with `MWOn12_UnregisterPlugin` and `MWOn12_GetHost`), so an ASI can join the
+plugin system at runtime and get the live D3D12 device once per frame — the
+SDK's `<mwon12/asi.hpp>` wraps that in one macro. Registration is deferred to
+the render thread, so the ordering guarantee plugins rely on still holds.
+
+So ASI versus plugin is a question of *when you run*, not what you may do. Both
+can be installed at once.
+
+Configured under `[ASI]` in `MWOn12.ini`; see `MWOn12SDK/docs/asi.md`.
 
 ---
 
