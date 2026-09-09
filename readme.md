@@ -93,7 +93,7 @@ Turn them back off afterwards. Each one costs performance.
 
 ## Modding
 
-[**MWOn12SDK**](https://github.com/tsyvm/mwon12sdk) is a separate folder next door, with two things
+[**MWOn12SDK**](https://github.com/TsyVM/mwOn12-sdk) is a separate folder next door, with two things
 in it:
 
 - **Shader kit** — replace the game's shaders with your own HLSL. No compiler,
