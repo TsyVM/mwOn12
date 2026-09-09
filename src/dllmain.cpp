@@ -93,8 +93,17 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVer)
     // be running under the loader lock. Idempotent; both create paths call it
     // because a game may use either.
     asi::LoadAll();
-    if (BackendSelect::Active() == Backend::DX12)
-        return new D9Root12(sdkVer);
+    if (BackendSelect::Active() == Backend::DX12) {
+        // nothrow, like the Ex path below. This is a C entry point the game
+        // calls through its import table; a std::bad_alloc unwinding out of it
+        // crosses a frame that was never compiled to expect one, and the game
+        // gets a corrupt stack rather than the null it knows how to handle.
+        auto* root = new (std::nothrow) D9Root12(sdkVer);
+        if (!root)
+            Logger::Log("ERROR: Direct3DCreate9 - out of memory creating the "
+                        "D3D12 root object");
+        return root;
+    }
 
     // Passthrough. BackendSelect only resolves to DX9 when it has already
     // confirmed the real entry point exists, so this branch failing means the
@@ -187,7 +196,7 @@ const void* MWON12_CALL MWOn12_GetHost(void)
 
 }
 
-BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
+BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID reserved)
 {
     if (reason == DLL_PROCESS_ATTACH)
     {
@@ -197,11 +206,17 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
         // Logs go beside the executable, not beside this DLL: the two are the
         // same directory for a normal install, but the executable is the one
         // the user will think to look in.
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        char exePath[MAX_PATH]{};
+        // Zeroed and length-checked rather than trusted: on truncation
+        // GetModuleFileName is not documented to terminate the buffer, and the
+        // std::string constructed from it would then run off the end of the
+        // stack frame looking for a null.
+        const DWORD exeLen = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        if (exeLen == 0 || exeLen >= MAX_PATH) exePath[0] = '\0';
         std::string gameDir = exePath;
         auto slash = gameDir.rfind('\\');
         if (slash != std::string::npos) gameDir.resize(slash + 1);
+        else                            gameDir.clear();
 
         Logger::Init((gameDir + "MWOn12.log").c_str());
         Logger::Log("MWOn12 loading - game dir: %s", gameDir.c_str());
@@ -234,7 +249,23 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
     {
         mwon12::sdk::PluginHost::Shutdown();
         Logger::Shutdown();
-        if (s_realD3D9) { FreeLibrary(s_realD3D9); s_realD3D9 = nullptr; }
+
+        // `reserved` is non-null when the process is terminating rather than
+        // when this DLL is being unloaded on its own. In that case every other
+        // module is going away too and the loader is already walking them, so
+        // FreeLibrary here is at best redundant and at worst a re-entrant load
+        // under a lock the loader holds -- the documented way to deadlock or
+        // fault on exit. The mapping is reclaimed with the address space.
+        //
+        // A d3d9.dll proxy is effectively never unloaded any other way, so the
+        // branch below is the unusual one; it exists so the DLL is still
+        // correct if something does LoadLibrary/FreeLibrary it.
+        if (reserved == nullptr && s_realD3D9) {
+            FreeLibrary(s_realD3D9);
+            s_realD3D9      = nullptr;
+            s_realCreate9   = nullptr;
+            s_realCreate9Ex = nullptr;
+        }
     }
     return TRUE;
 }

@@ -203,8 +203,17 @@ void Init() noexcept
         "==========================================================\n",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, pathUtf8);
 
+    // snprintf reports the length it WANTED, not the length it wrote, so a
+    // long log path -- g_path is MAX_PATH wide and its UTF-8 form up to twice
+    // that -- makes n exceed the 512-byte banner. Writing n bytes from a
+    // 512-byte buffer reads past the end of the stack frame and puts whatever
+    // follows it into the log.
+    if (n < 0) n = 0;
+    if (n > static_cast<int>(sizeof(banner)) - 1)
+        n = static_cast<int>(sizeof(banner)) - 1;
+
     AcquireSRWLockExclusive(&g_lock);
-    RawWrite(banner + 3, n - 3);
+    if (n > 3) RawWrite(banner + 3, n - 3);
     if (g_file != INVALID_HANDLE_VALUE) FlushFileBuffers(g_file);
     ReleaseSRWLockExclusive(&g_lock);
 }

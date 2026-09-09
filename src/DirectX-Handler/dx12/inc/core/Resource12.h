@@ -70,6 +70,15 @@ public:
                D3D12_RESOURCE_STATES initState,
                int backBufferIndex = -1) noexcept;
 
+    // Releases the underlying resource and forgets the context, exactly as the
+    // destructor would. Idempotent.
+    //
+    // For a Resource12 owned by something that outlives the DeviceContext12 --
+    // a member of D9Device12, say, whose destructor body deletes the context
+    // before member destructors run -- this has to be called while the context
+    // is still alive. ~Resource12 dereferences it.
+    void Shutdown() noexcept;
+
     [[nodiscard]] bool Valid() const noexcept { return m_res != nullptr; }
     [[nodiscard]] ID3D12Resource* Native() const noexcept { return m_res.Get(); }
     [[nodiscard]] const D3D12_RESOURCE_DESC& Desc() const noexcept { return m_desc; }

@@ -9,6 +9,8 @@
 #include "WrappedIDirect3DDevice9.h"
 #include "../Logger.h"
 
+#include <new>
+
 WrappedIDirect3D9::WrappedIDirect3D9(IDirect3D9* pReal)
     : m_pReal(pReal), m_refCount(1)
 {
@@ -68,7 +70,19 @@ HRESULT __stdcall WrappedIDirect3D9::CreateDevice(
         BehaviorFlags, pPresentationParameters, &pReal);
 
     if (SUCCEEDED(hr) && pReal) {
-        auto* wrapped = new WrappedIDirect3DDevice9(pReal, this, hFocusWindow, pPresentationParameters);
+        // nothrow, and the real device is released if the wrapper cannot be
+        // built: the caller sees a failed CreateDevice and has nothing to
+        // release, so anything still held here is leaked for the life of the
+        // process -- and a D3D9 device is not a small thing to leak.
+        auto* wrapped = new (std::nothrow)
+            WrappedIDirect3DDevice9(pReal, this, hFocusWindow, pPresentationParameters);
+        if (!wrapped) {
+            pReal->Release();
+            *ppReturnedDeviceInterface = nullptr;
+            Logger::Log("WrappedIDirect3D9::CreateDevice: out of memory wrapping "
+                        "the real device");
+            return E_OUTOFMEMORY;
+        }
         *ppReturnedDeviceInterface = wrapped;
         Logger::Log("WrappedIDirect3D9::CreateDevice: wrapped device created (%ux%u)",
                     pPresentationParameters ? pPresentationParameters->BackBufferWidth  : 0,

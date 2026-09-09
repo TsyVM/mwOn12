@@ -49,7 +49,14 @@ public:
                              UINT width, UINT height, UINT mipLevels,
                              UINT arraySlice, UINT arraySize) noexcept;
 
-    void Clear() noexcept { m_pipelines.clear(); }
+    // Releases every pipeline state and gives the two sampler descriptors back
+    // to the context's staging heap, leaving the object as it was constructed.
+    //
+    // Must be called while the DeviceContext12 is still alive -- freeing a
+    // descriptor reaches into its heap. There is no destructor doing this,
+    // deliberately: a Blitter12 is a member of D9Device12, whose destructor
+    // deletes the context before member destructors run.
+    void Clear() noexcept;
 
 private:
     HRESULT EnsureShaders() noexcept;

@@ -81,17 +81,45 @@ HRESULT Blitter12::EnsureShaders() noexcept
     sd.MinLOD         = 0.0f;
     sd.MaxLOD         = D3D12_FLOAT32_MAX;
 
-    sd.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-    m_pointSampler = m_ctx->SamplerStaging().Alloc();
-    if (m_pointSampler.ptr == SIZE_T(-1)) return E_OUTOFMEMORY;
-    m_ctx->Device()->CreateSampler(&sd, m_pointSampler);
+    // Allocated only when not already held. A previous call that compiled the
+    // vertex shader and then failed on the pixel shader comes back through
+    // here, and re-allocating would strand the descriptors it took the first
+    // time -- the staging heap is fixed-size and has no owner to reclaim them.
+    if (m_pointSampler.ptr == SIZE_T(-1)) {
+        sd.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        m_pointSampler = m_ctx->SamplerStaging().Alloc();
+        if (m_pointSampler.ptr == SIZE_T(-1)) return E_OUTOFMEMORY;
+        m_ctx->Device()->CreateSampler(&sd, m_pointSampler);
+    }
 
-    sd.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    m_linearSampler = m_ctx->SamplerStaging().Alloc();
-    if (m_linearSampler.ptr == SIZE_T(-1)) return E_OUTOFMEMORY;
-    m_ctx->Device()->CreateSampler(&sd, m_linearSampler);
+    if (m_linearSampler.ptr == SIZE_T(-1)) {
+        sd.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        m_linearSampler = m_ctx->SamplerStaging().Alloc();
+        if (m_linearSampler.ptr == SIZE_T(-1)) return E_OUTOFMEMORY;
+        m_ctx->Device()->CreateSampler(&sd, m_linearSampler);
+    }
 
     return S_OK;
+}
+
+void Blitter12::Clear() noexcept
+{
+    m_pipelines.clear();
+
+    // The two samplers go back to the staging heap. Without this a Clear
+    // followed by any further use leaks a descriptor slot per cycle, and the
+    // heap is fixed-size.
+    if (m_ctx) {
+        if (m_pointSampler.ptr  != SIZE_T(-1)) m_ctx->SamplerStaging().Free(m_pointSampler);
+        if (m_linearSampler.ptr != SIZE_T(-1)) m_ctx->SamplerStaging().Free(m_linearSampler);
+    }
+    m_pointSampler  = D3D12_CPU_DESCRIPTOR_HANDLE{ SIZE_T(-1) };
+    m_linearSampler = D3D12_CPU_DESCRIPTOR_HANDLE{ SIZE_T(-1) };
+
+    // Dropped with the samplers, not kept: EnsureShaders treats non-empty
+    // bytecode as "already set up" and would skip re-allocating them.
+    m_vsDxbc.clear();
+    m_psDxbc.clear();
 }
 
 ID3D12PipelineState* Blitter12::PipelineFor(DXGI_FORMAT dstFormat) noexcept

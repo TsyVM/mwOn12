@@ -993,13 +993,18 @@ UploadRing::Allocation DeviceContext12::AllocUpload(UINT64 bytes, UINT64 align) 
     return out;
 }
 
+// All three take m_retiredLock: see the note on the member. The COM object is
+// referenced before the lock is taken and released after it is dropped, so the
+// critical section is one push_back and nothing else.
 void DeviceContext12::Retire(ID3D12Resource* res) noexcept
 {
     if (!res) return;
     Retired r;
     r.object = res;
     r.fence  = m_globalFenceValue + 1;
+    AcquireSRWLockExclusive(&m_retiredLock);
     m_retired.push_back(std::move(r));
+    ReleaseSRWLockExclusive(&m_retiredLock);
 }
 
 void DeviceContext12::Retire(ID3D12PipelineState* pso) noexcept
@@ -1008,7 +1013,9 @@ void DeviceContext12::Retire(ID3D12PipelineState* pso) noexcept
     Retired r;
     r.object = pso;
     r.fence  = m_globalFenceValue + 1;
+    AcquireSRWLockExclusive(&m_retiredLock);
     m_retired.push_back(std::move(r));
+    ReleaseSRWLockExclusive(&m_retiredLock);
 }
 
 void DeviceContext12::Retire(ID3D12GraphicsCommandList* list) noexcept
@@ -1017,15 +1024,27 @@ void DeviceContext12::Retire(ID3D12GraphicsCommandList* list) noexcept
     Retired r;
     r.object = list;
     r.fence  = m_globalFenceValue + 1;
+    AcquireSRWLockExclusive(&m_retiredLock);
     m_retired.push_back(std::move(r));
+    ReleaseSRWLockExclusive(&m_retiredLock);
 }
 
 void DeviceContext12::CollectGarbage() noexcept
 {
-    if (m_retired.empty() || !m_fence) return;
+    if (!m_fence) return;
     const UINT64 completed = m_fence->GetCompletedValue();
-    while (!m_retired.empty() && m_retired.front().fence <= completed)
+
+    // Moved out under the lock and destroyed outside it. Releasing the last
+    // reference to a resource runs driver code of unbounded length, and doing
+    // that with the lock held would block every thread trying to release a
+    // texture for the duration.
+    std::deque<Retired> done;
+    AcquireSRWLockExclusive(&m_retiredLock);
+    while (!m_retired.empty() && m_retired.front().fence <= completed) {
+        done.push_back(std::move(m_retired.front()));
         m_retired.pop_front();
+    }
+    ReleaseSRWLockExclusive(&m_retiredLock);
 }
 
 HRESULT DeviceContext12::ResizeSwapChain(UINT w, UINT h,
@@ -1355,7 +1374,12 @@ DeviceContext12::~DeviceContext12()
         m_cmdListOpen = false;
     }
     WaitForGPU();
-    m_retired.clear();
+    {
+        AcquireSRWLockExclusive(&m_retiredLock);
+        std::deque<Retired> done;
+        done.swap(m_retired);
+        ReleaseSRWLockExclusive(&m_retiredLock);
+    }
     m_upload.Shutdown();
 
     DeviceContext12* expected = this;

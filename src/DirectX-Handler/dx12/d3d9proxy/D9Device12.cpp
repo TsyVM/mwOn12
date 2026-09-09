@@ -68,12 +68,23 @@ D9Device12::D9Device12(std::unique_ptr<DeviceContext12> ctx, D9Root12* root,
 
 D9Device12::~D9Device12()
 {
-    // Before anything is torn down, and before the GPU wait, so a plugin can
-    // still record or query if it needs to. Everything it owns must be gone by
-    // the time this returns -- the D3D12 device does not survive this function.
-    sdk::PluginHost::OnDeviceDestroyed();
-
+    // The GPU is idled FIRST, before plugins are told anything.
+    //
+    // A plugin is required to release every D3D12 object it owns before
+    // OnDeviceDestroyed returns, and its per-frame upload buffers are exactly
+    // the resources the GPU is still reading from the frames in flight. D3D12
+    // does not keep a resource alive because a submitted command list
+    // references it, so releasing one mid-flight is a use-after-free on the
+    // GPU: it corrupts intermittently, or faults with a page-fault address in
+    // freed memory and no stack that names the plugin. Waiting here is what
+    // makes the documented rule safe to follow.
+    //
+    // Nothing is lost by waiting: OnDeviceDestroyed has no open command list
+    // to record into -- the frame's list belongs to OnPresent -- so there is
+    // no GPU work a plugin could still legitimately want to submit.
     if (m_ctx) m_ctx->WaitForGPU();
+
+    sdk::PluginHost::OnDeviceDestroyed();
 
     ReleaseImplicitSurfaces();
 
@@ -89,6 +100,19 @@ D9Device12::~D9Device12()
     if (st.pixelShader)  { st.pixelShader->Release();  st.pixelShader = nullptr; }
     m_decl = nullptr; m_vs = nullptr; m_ps = nullptr;
 
+    // Everything below holds D3D12 objects, or a raw DeviceContext12*, and
+    // every one of them has to go before m_ctx does.
+    //
+    // Member destructors run after this body, in reverse declaration order,
+    // and m_ctx is declared before all of them -- so anything left to a member
+    // destructor is torn down after the context has been deleted. For
+    // m_zeroStream that is not merely bad ordering but a use-after-free:
+    // ~Resource12 calls back into the context to leave the state journal and
+    // to retire its ID3D12Resource. For the two caches it is the live-object
+    // report, since a pipeline state holds a reference to the device and the
+    // device therefore outlives the context that was meant to own it.
+    m_zeroStream.Shutdown();
+    m_blitter.Clear();
     m_psoCache.Clear();
     m_privateData.Clear();
     m_ctx.reset();

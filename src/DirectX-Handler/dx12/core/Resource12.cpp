@@ -145,6 +145,11 @@ void Resource12::Adopt(DeviceContext12* ctx, ID3D12Resource* res,
 
 Resource12::~Resource12()
 {
+    Shutdown();
+}
+
+void Resource12::Shutdown() noexcept
+{
     // The state journal holds raw pointers for the duration of one command
     // list; a resource the game releases mid-frame must not leave one behind.
     if (m_ctx) m_ctx->ForgetInStateJournal(this);
@@ -154,6 +159,15 @@ Resource12::~Resource12()
         m_mapped = nullptr;
     }
     ReleaseToRetirement();
+
+    // Cleared last, and only after the two calls above have used it. A second
+    // Shutdown, or the destructor running after one, then does nothing --
+    // which is the point: the owner calls this while the context is alive, and
+    // the destructor must not reach a context that has since been deleted.
+    m_ctx      = nullptr;
+    m_subCount = 0;
+    m_uniform  = true;
+    m_states.clear();
 }
 
 void Resource12::ReleaseToRetirement() noexcept

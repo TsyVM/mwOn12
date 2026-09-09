@@ -119,7 +119,13 @@ void MWON12_CALL HostLog(MWOn12_LogLevel level, const char* fmt, ...)
     va_start(ap, fmt);
     const int n = _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
     va_end(ap);
-    if (n < 0) return;
+
+    // A negative return means the message was longer than the buffer, and
+    // _TRUNCATE has already written the part that fits and terminated it.
+    // Dropping the line here would silently lose exactly the long diagnostics
+    // -- a shader dump, a resource listing -- that a plugin logs when
+    // something has gone wrong. Truncated is better than absent.
+    if (n < 0 && buf[0] == '\0') return;
 
     switch (level) {
     case MWON12_LOG_ERROR: DXLOG_ERROR("[plugin] %s", buf); break;
@@ -150,14 +156,23 @@ int MWON12_CALL HostConfigString(const char* section, const char* key,
     out[0] = '\0';
     if (!section || !key) return 0;
 
-    wchar_t buf[1024]{};
-    const DWORD n = GetPrivateProfileStringW(
-        Widen(section).c_str(), Widen(key).c_str(),
-        fallback ? Widen(fallback).c_str() : L"",
-        buf, static_cast<DWORD>(std::size(buf)),
-        g_iniPathW.empty() ? nullptr : g_iniPathW.c_str());
-
-    const std::string s = Narrow(std::wstring(buf, n));
+    // No ini path means no ini file, which is the fallback's case and not a
+    // reason to go looking elsewhere. Passing null as the file name to
+    // GetPrivateProfileString does not mean "no file": it means win.ini in the
+    // Windows directory, so a plugin asking for a key it never wrote would
+    // read a stranger's setting and take it as its own.
+    std::string s;
+    if (g_iniPathW.empty()) {
+        s = fallback ? fallback : "";
+    } else {
+        wchar_t buf[1024]{};
+        const DWORD n = GetPrivateProfileStringW(
+            Widen(section).c_str(), Widen(key).c_str(),
+            fallback ? Widen(fallback).c_str() : L"",
+            buf, static_cast<DWORD>(std::size(buf)),
+            g_iniPathW.c_str());
+        s = Narrow(std::wstring(buf, n));
+    }
     const int copy = (static_cast<int>(s.size()) < outBytes - 1)
                    ? static_cast<int>(s.size()) : outBytes - 1;
     std::memcpy(out, s.data(), static_cast<size_t>(copy));
@@ -328,7 +343,23 @@ void DrainPending(D9Device12* dev)
             DXLOG_INFO("[plugin] %s unregistered", it->name.c_str());
             if (g_deviceLive && it->api.OnDeviceDestroyed)
                 it->api.OnDeviceDestroyed(it->api.user);
+
+            // OnShutdown as well, and for the same reason it is called at
+            // process teardown: it is the hook that ends the plugin's life,
+            // and the SDK's thunk is where the C++ object registered by an ASI
+            // is deleted. Dropping the entry without it leaks that object --
+            // and leaves the plugin believing it is still running.
+            if (it->api.OnShutdown)
+                it->api.OnShutdown(it->api.user);
+
             g_plugins.erase(it);
+
+            // Recomputed rather than left as it was. A plugin that presented
+            // has just gone, and a stale flag keeps the present path doing the
+            // barrier, the rebind and the OnPresent walk for nobody.
+            g_wantsPresent = false;
+            for (const auto& p : g_plugins)
+                if (p.api.OnPresent) { g_wantsPresent = true; break; }
             break;
         }
     }
@@ -491,6 +522,25 @@ void Shutdown() noexcept
     // reach here with one still live. Plugins are promised this ordering.
     OnDeviceDestroyed();
 
+    // Anything an ASI registered that was never drained is still owed its
+    // OnShutdown. It never received OnDeviceCreated and so owns no D3D12
+    // objects, but the SDK's thunk is where the registered C++ object is
+    // deleted -- dropping the queue without calling it leaks one object per
+    // ASI that registered late, and leaves that ASI's destructor unrun.
+    //
+    // Taken under the lock and shut down outside it: a plugin's OnShutdown may
+    // call Unregister, which takes the same lock.
+    std::vector<Loaded> pending;
+    {
+        std::lock_guard lk(g_pendingMutex);
+        pending.swap(g_pendingAdd);
+        g_pendingRemove.clear();
+        g_hasPending.store(false, std::memory_order_release);
+    }
+    for (auto& p : pending)
+        if (p.api.OnShutdown)
+            p.api.OnShutdown(p.api.user);
+
     for (auto& p : g_plugins)
         if (p.api.OnShutdown)
             p.api.OnShutdown(p.api.user);
@@ -502,6 +552,9 @@ void Shutdown() noexcept
     g_plugins.clear();
     g_wantsPresent = false;
 
+    // Whatever the calls above queued -- an OnShutdown that unregistered a
+    // sibling, most likely -- is discarded rather than acted on. Every plugin
+    // has already had its OnShutdown by this point.
     std::lock_guard lk(g_pendingMutex);
     g_pendingAdd.clear();
     g_pendingRemove.clear();

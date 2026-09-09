@@ -367,8 +367,23 @@ private:
 
     struct Retired {
         ComPtr<IUnknown> object;
-        UINT64           fence;
+        UINT64           fence{ 0 };
     };
+
+    // Guards m_retired, and only m_retired.
+    //
+    // The three Retire overloads are reached from ~Resource12, which runs
+    // whenever the game releases a texture or a buffer -- on whatever thread
+    // did the release, which under D3DCREATE_MULTITHREADED is not the render
+    // thread. CollectGarbage pops from the render thread. A push_back racing a
+    // pop_front on a std::deque corrupts its block index, and the fault lands
+    // later, inside an allocator, with a stack that names neither.
+    //
+    // This does not make DeviceContext12 thread-safe -- see the note in
+    // D9Root12::CreateDeviceInternal; the rest of it is still written for one
+    // thread. It closes the one place where the game's own threading reaches
+    // shared state without going through the upload ring, which locks itself.
+    mutable SRWLOCK                   m_retiredLock = SRWLOCK_INIT;
     std::deque<Retired>               m_retired;
 
     struct StateJournalEntry {

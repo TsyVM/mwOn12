@@ -27,6 +27,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <synchapi.h>
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -158,10 +159,20 @@ private:
     mutable SRWLOCK m_sampLock = SRWLOCK_INIT;
     std::unordered_map<SamplerKey12, D3D12_CPU_DESCRIPTOR_HANDLE, SamplerKey12Hash> m_samplers;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE m_nullSrv2D{ SIZE_T(-1) };
-    D3D12_CPU_DESCRIPTOR_HANDLE m_nullSrvCube{ SIZE_T(-1) };
-    D3D12_CPU_DESCRIPTOR_HANDLE m_nullSrv3D{ SIZE_T(-1) };
-    D3D12_CPU_DESCRIPTOR_HANDLE m_defaultSampler{ SIZE_T(-1) };
+    // The four singleton descriptors, as atomics rather than plain handles.
+    //
+    // NullSrv and DefaultSampler are reached from the draw path, which the
+    // game runs on more than one thread when it asks for
+    // D3DCREATE_MULTITHREADED. Read-then-allocate-then-store on a plain member
+    // lets two threads both allocate, and the one that stores second strands
+    // the other's descriptor in a fixed-size staging heap. A compare-exchange
+    // makes the winner obvious and gives the loser something to free -- and
+    // keeps the common case, where the value is already set, to one relaxed
+    // load rather than a lock on every draw.
+    std::atomic<SIZE_T> m_nullSrv2D{ SIZE_T(-1) };
+    std::atomic<SIZE_T> m_nullSrvCube{ SIZE_T(-1) };
+    std::atomic<SIZE_T> m_nullSrv3D{ SIZE_T(-1) };
+    std::atomic<SIZE_T> m_defaultSampler{ SIZE_T(-1) };
 
     uint64_t m_misses{ 0 };
 };

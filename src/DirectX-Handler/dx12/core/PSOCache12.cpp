@@ -386,6 +386,17 @@ D3D12_CPU_DESCRIPTOR_HANDLE PSOCache12::GetOrCreateSampler(const SamplerKey12& k
     auto [it, inserted] = m_samplers.emplace(key, h);
     const auto result = it->second;
     ReleaseSRWLockExclusive(&m_sampLock);
+
+    // Lost the race: another thread created a sampler for this key while this
+    // one was building the description, so the map kept theirs and `h` is
+    // referenced by nothing. Giving it back matters -- the sampler staging
+    // heap is fixed-size, and a descriptor stranded here is stranded for the
+    // life of the device. The failure it eventually produces is the
+    // "sampler staging heap exhausted" above, at which point every subsequent
+    // sampler silently becomes the default one and textures start wrapping
+    // and filtering wrongly, somewhere far from here.
+    if (!inserted) m_ctx->SamplerStaging().Free(h);
+
     return result;
 }
 
@@ -394,12 +405,13 @@ D3D12_CPU_DESCRIPTOR_HANDLE PSOCache12::NullSrv(D3D12_SRV_DIMENSION dim) noexcep
     if (!m_ctx || !m_ctx->Device())
         return D3D12_CPU_DESCRIPTOR_HANDLE{ SIZE_T(-1) };
 
-    D3D12_CPU_DESCRIPTOR_HANDLE* slot = &m_nullSrv2D;
+    std::atomic<SIZE_T>* slot = &m_nullSrv2D;
     if (dim == D3D12_SRV_DIMENSION_TEXTURECUBE) slot = &m_nullSrvCube;
     else if (dim == D3D12_SRV_DIMENSION_TEXTURE3D) slot = &m_nullSrv3D;
 
-    if (slot->ptr != SIZE_T(-1))
-        return *slot;
+    if (const SIZE_T have = slot->load(std::memory_order_acquire);
+        have != SIZE_T(-1))
+        return D3D12_CPU_DESCRIPTOR_HANDLE{ have };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -415,14 +427,25 @@ D3D12_CPU_DESCRIPTOR_HANDLE PSOCache12::NullSrv(D3D12_SRV_DIMENSION dim) noexcep
     if (h.ptr == SIZE_T(-1)) return h;
 
     m_ctx->Device()->CreateShaderResourceView(nullptr, &sd, h);
-    *slot = h;
+
+    // Published only if this thread is the one that got here first. The view
+    // is created before the exchange, so any thread that reads a non-sentinel
+    // value reads a descriptor that is already complete.
+    SIZE_T expected = SIZE_T(-1);
+    if (!slot->compare_exchange_strong(expected, h.ptr,
+                                       std::memory_order_acq_rel,
+                                       std::memory_order_acquire)) {
+        m_ctx->SrvStaging().Free(h);
+        return D3D12_CPU_DESCRIPTOR_HANDLE{ expected };
+    }
     return h;
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE PSOCache12::DefaultSampler() noexcept
 {
-    if (m_defaultSampler.ptr != SIZE_T(-1))
-        return m_defaultSampler;
+    if (const SIZE_T have = m_defaultSampler.load(std::memory_order_acquire);
+        have != SIZE_T(-1))
+        return D3D12_CPU_DESCRIPTOR_HANDLE{ have };
     if (!m_ctx || !m_ctx->Device())
         return D3D12_CPU_DESCRIPTOR_HANDLE{ SIZE_T(-1) };
 
@@ -439,7 +462,14 @@ D3D12_CPU_DESCRIPTOR_HANDLE PSOCache12::DefaultSampler() noexcept
     const auto h = m_ctx->SamplerStaging().Alloc();
     if (h.ptr == SIZE_T(-1)) return h;
     m_ctx->Device()->CreateSampler(&sd, h);
-    m_defaultSampler = h;
+
+    SIZE_T expected = SIZE_T(-1);
+    if (!m_defaultSampler.compare_exchange_strong(expected, h.ptr,
+                                                  std::memory_order_acq_rel,
+                                                  std::memory_order_acquire)) {
+        m_ctx->SamplerStaging().Free(h);
+        return D3D12_CPU_DESCRIPTOR_HANDLE{ expected };
+    }
     return h;
 }
 
@@ -448,6 +478,40 @@ void PSOCache12::Clear() noexcept
     AcquireSRWLockExclusive(&m_psoLock);
     m_pipelines.clear();
     ReleaseSRWLockExclusive(&m_psoLock);
+
+    // The descriptors go back too, and the cached handles are reset to their
+    // constructed value.
+    //
+    // Without this, Clear left m_samplers full of handles into a staging heap
+    // that is about to be destroyed with the context -- and a
+    // GetOrCreateSampler after a Clear would find one and hand it out. The
+    // heap dies with the device either way, so nothing was leaking across the
+    // process; what was wrong is that "cleared" did not mean cleared.
+    AcquireSRWLockExclusive(&m_sampLock);
+
+    // Exchanged rather than read-then-reset, so a descriptor is freed exactly
+    // once even if this ran alongside a thread still in NullSrv.
+    auto take = [](std::atomic<SIZE_T>& slot, CpuDescriptorHeap* heap) {
+        const SIZE_T h = slot.exchange(SIZE_T(-1), std::memory_order_acq_rel);
+        if (h != SIZE_T(-1) && heap) heap->Free(D3D12_CPU_DESCRIPTOR_HANDLE{ h });
+    };
+
+    if (m_ctx) {
+        auto& samplers = m_ctx->SamplerStaging();
+        for (const auto& [key, h] : m_samplers)
+            if (h.ptr != SIZE_T(-1)) samplers.Free(h);
+        take(m_defaultSampler, &samplers);
+        take(m_nullSrv2D,   &m_ctx->SrvStaging());
+        take(m_nullSrvCube, &m_ctx->SrvStaging());
+        take(m_nullSrv3D,   &m_ctx->SrvStaging());
+    } else {
+        take(m_defaultSampler, nullptr);
+        take(m_nullSrv2D,   nullptr);
+        take(m_nullSrvCube, nullptr);
+        take(m_nullSrv3D,   nullptr);
+    }
+    m_samplers.clear();
+    ReleaseSRWLockExclusive(&m_sampLock);
 }
 
 }

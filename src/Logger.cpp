@@ -26,9 +26,14 @@ bool             Logger::s_init = false;
 
 void Logger::Init(const char* path)
 {
+    // Idempotent. A second InitializeCriticalSection on a live critical
+    // section leaks the first one's debug info and resets ownership under
+    // whoever holds it, which is a deadlock waiting for the next writer.
+    if (s_init) return;
+
     InitializeCriticalSection(&s_cs);
+    s_init = true;                     // before the file, so Log() below works
     fopen_s(&s_file, path, "w");
-    s_init = true;
     Log("MWOn12 v%s (DirectX 9 -> DirectX 12)  -  log opened.",
         MWON12_VERSION_STRING);
 }
@@ -64,6 +69,20 @@ void Logger::Log(const char* fmt, ...)
 
 void Logger::Shutdown()
 {
+    if (!s_init) return;
+
+    // Closed under the lock, so a writer already past its s_file check cannot
+    // be holding the FILE* we are about to free.
+    EnterCriticalSection(&s_cs);
     if (s_file) { fclose(s_file); s_file = nullptr; }
-    if (s_init) { DeleteCriticalSection(&s_cs); s_init = false; }
+    LeaveCriticalSection(&s_cs);
+
+    // The critical section itself is deliberately not deleted, and s_init stays
+    // true. Both are what makes Log() safe from another thread: it tests
+    // s_init, then enters the section, and there is no way to close that window
+    // from here. Deleting the section between those two steps is undefined
+    // behaviour in the writer -- typically a hang inside ntdll with no symbol
+    // that names this file. This runs at DLL_PROCESS_DETACH, where the object
+    // costs nothing and the process is about to take the whole heap with it.
+    // Every subsequent Log() finds s_file null and does nothing.
 }
