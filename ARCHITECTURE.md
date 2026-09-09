@@ -1,9 +1,29 @@
-# MWOn12 — architecture
+<div align="center">
 
-Internal document. `README.md` is for users and says nothing about internals;
-this one says how the thing is built and which mistakes are already paid for.
+# MWOn12 — Architecture
 
----
+<p><em>How the renderer is built, and which mistakes are already paid for</em></p>
+
+[![Internal](https://img.shields.io/badge/Document-Internal-D2B48C?style=for-the-badge&labelColor=1C1008)](#)
+[![Direct3D 12](https://img.shields.io/badge/Direct3D-12-D2B48C?style=for-the-badge&labelColor=1C1008)](#2-the-hard-rule)
+[![TeamVanilla](https://img.shields.io/badge/Team-TeamVanilla-D2B48C?style=for-the-badge&labelColor=1C1008)](https://www.teamvanilla.org/)
+
+</div>
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
+
+`README.md` is for users and says nothing about internals. This one is the
+counterpart: the shape of the code, the rules it holds itself to, and the
+failures that are already understood.
+
+<div align="center">
+
+[What it is](#1-what-it-is) · [The hard rule](#2-the-hard-rule) · [Layout](#3-layout) · [Build](#4-build) · [Backend selection](#5-backend-selection) · [Plugins](#6-plugins) · [Learned the hard way](#7-things-already-learned-the-hard-way)
+
+</div>
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
+
 
 ## 1. What it is
 
@@ -19,6 +39,8 @@ Backend=1   DirectX 9    pass through to the real system d3d9.dll
 
 `Backend=1` is not a renderer this project maintains. It is the escape hatch
 for a machine with no D3D12 adapter, so the game still starts.
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
 
 ## 2. The hard rule
 
@@ -44,6 +66,8 @@ translation.
 `D3DCOMPILER_47.dll`, and kernel32/user32. Check with
 `dumpbin /DEPENDENTS d3d9.dll`. In particular it must not import `d3d9.dll` —
 it *is* `d3d9.dll`, and a self-import means someone linked `d3d9.lib`.
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
 
 ## 3. Layout
 
@@ -92,6 +116,8 @@ plus MWSDK, VanGFX and VanGUI include paths. No source file referenced any of
 them. They are gone, which is why MWOn12 builds offline and needs no DirectX
 SDK.
 
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
+
 ## 4. Build
 
 ```bat
@@ -109,6 +135,8 @@ The DX12 source list in `CMakeLists.txt` is **explicit, not globbed**. A new
 look like missing code and are not.
 
 Output is always `d3d9.dll` regardless of the CMake target name.
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
 
 ## 5. Backend selection
 
@@ -133,6 +161,8 @@ which is a valid config.
 
 Every setting also has a `MWON12_*` environment override, so a diagnostic run
 can be scripted without editing a user's config and forgetting to put it back.
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
 
 ## 6. Plugins
 
@@ -173,6 +203,8 @@ There is deliberately **no sandbox**. A plugin shares the address space and can
 corrupt the device as easily as we can. The ABI documents what is safe;
 enforcing it is impossible and pretending otherwise would be worse.
 
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
+
 ## 7. Things already learned the hard way
 
 - **Never `LoadLibrary` under the loader lock.** Both the adapter probe and the
@@ -191,3 +223,13 @@ enforcing it is impossible and pretending otherwise would be worse.
 - **`MWOn12.log` is written as ANSI with no BOM.** Keep it ASCII — a UTF-8
   em-dash arrives as three bytes of mojibake in Notepad and in pasted bug
   reports. `MWOn12-render.log` writes a BOM and is fine.
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&color=0:1C1008,50:6B4226,100:1C1008&height=3"/>
+
+<div align="center">
+
+<sub>Built and maintained by <a href="https://github.com/TsyVM">TsyVM</a> · <a href="https://www.teamvanilla.org/">TeamVanilla</a></sub>
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:6B4226,100:1C1008&height=80&section=footer"/>
+
+</div>
